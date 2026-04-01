@@ -1,14 +1,17 @@
 import asyncio
+import re
 import time
 
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
-    KeyboardButton,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
     Message,
-    ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    User,
 )
 
 from src.core.config import settings
@@ -26,69 +29,129 @@ from src.states.registration import EvaluationFSM
 router = Router()
 
 
-def get_models_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text='dssm_model_with_popular')],
-            [KeyboardButton(text='als_ann_with_features_model')],
-            [KeyboardButton(text='knn_tfidf_model_with_popular')],
-            [KeyboardButton(text='baseline_first_10_items')],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-    )
-
-
 def get_rps_keyboard():
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text='Easy (5 RPS)')],
-            [KeyboardButton(text='Medium (15 RPS)')],
-            [KeyboardButton(text='Hard (50 RPS)')],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True,
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text='🟢 Easy (5 RPS)', callback_data='rps_5')],
+            [InlineKeyboardButton(text='🟡 Medium (15 RPS)', callback_data='rps_15')],
+            [InlineKeyboardButton(text='🔴 Hard (50 RPS)', callback_data='rps_50')],
+        ]
     )
+
+
+def get_start_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text='🚀 Начать тестирование', callback_data='start_new'
+                )
+            ]
+        ]
+    )
+
+
+def get_config_menu_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text='🔄 Запустить проверку', callback_data='retry_check'
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text='📝 Изменить модель', callback_data='edit_model'
+                )
+            ],
+            [
+                InlineKeyboardButton(text='🔗 Изменить URL', callback_data='edit_url')
+            ],
+            [
+                InlineKeyboardButton(
+                    text='🔑 Изменить токен', callback_data='edit_token'
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text='❌ Отмена', callback_data='cancel_evaluation'
+                )
+            ],
+        ]
+    )
+
+
+async def show_summary_menu(message: Message, state: FSMContext):
+    user_data = await state.get_data()
+    await message.answer(
+        f'⚙️ **Конфигурация теста**\n\n'
+        f'• **Модель**: `{user_data.get("model_name", "—")}`\n'
+        f'• **URL**: `{user_data.get("base_url", "—")}`\n'
+        f'• **Сложность**: `{user_data.get("target_rps", "—")} RPS`\n\n'
+        'Что будем делать?',
+        reply_markup=get_config_menu_keyboard(),
+        parse_mode='Markdown',
+    )
+
+
+async def start_evaluation_flow(message: Message, state: FSMContext, user: User):
+    await state.clear()
+
+    if user.username:
+        student_name = f'@{user.username}'
+    else:
+        student_name = user.full_name
+
+    await state.update_data(student_name=student_name)
+
+    await message.answer(
+        f'👋 Привет, {student_name}!\n\n'
+        'Я бот для оценки рекомендательных систем. Давай протестируем твой сервис! 🚀\n\n'
+        '📝 Введи название модели (например, `main` или `boost`):',
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode='Markdown',
+    )
+    await state.set_state(EvaluationFSM.waiting_for_model_name)
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer(
-        'Привет! Я бот для оценки рекомендательных систем.\n'
-        'Давай проведем тест твоего сервиса.\n\n'
-        'Для начала введи свои Имя и Фамилию (или никнейм):',
-        reply_markup=ReplyKeyboardRemove(),
-    )
-    await state.set_state(EvaluationFSM.waiting_for_name)
+    await start_evaluation_flow(message, state, message.from_user)
 
 
 @router.message(Command('cancel'))
 async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-        'Действие отменено. Введите /start чтобы начать заново.',
-        reply_markup=ReplyKeyboardRemove(),
+        '❌ Действие отменено.',
+        reply_markup=get_start_keyboard(),
     )
-
-
-@router.message(EvaluationFSM.waiting_for_name)
-async def process_name(message: Message, state: FSMContext):
-    await state.update_data(student_name=message.text)
-    await message.answer(
-        'Отлично! Теперь выбери (или введи) название модели, которую будем тестировать:',
-        reply_markup=get_models_keyboard(),
-    )
-    await state.set_state(EvaluationFSM.waiting_for_model_name)
 
 
 @router.message(EvaluationFSM.waiting_for_model_name)
 async def process_model_name(message: Message, state: FSMContext):
-    await state.update_data(model_name=message.text)
+    model_name = message.text.strip()
+
+    if not re.match(r'^[a-zA-Z0-9_-]+$', model_name):
+        await message.answer(
+            '❌ Некорректное название модели.\n\n'
+            'Название должно состоять только из латинских букв, цифр, подчеркиваний `_` или дефисов `-`.\n'
+            'Попробуй еще раз:'
+        )
+        return
+
+    await state.update_data(model_name=model_name)
+
+    data = await state.get_data()
+    if data.get('target_rps'):
+        await show_summary_menu(message, state)
+        return
+
     await message.answer(
-        'Принято. Теперь введи базовый URL твоего поднятого сервиса '
-        '(например: http://192.168.1.5:8000 или https://my-recsys.ru):',
+        '✅ Принято. Теперь введи базовый URL твоего сервиса\n'
+        '(например: `http://recsys-service.com` или `http://localhost:8000`):',
         reply_markup=ReplyKeyboardRemove(),
+        parse_mode='Markdown',
     )
     await state.set_state(EvaluationFSM.waiting_for_url)
 
@@ -98,12 +161,19 @@ async def process_url(message: Message, state: FSMContext):
     url = message.text.strip().rstrip('/')
     if not url.startswith('http'):
         await message.answer(
-            'Пожалуйста, введи корректный URL (с http:// или https://).'
+            '⚠️ Пожалуйста, введи корректный URL (с `http://` или `https://`).',
+            parse_mode='Markdown',
         )
         return
     await state.update_data(base_url=url)
+
+    data = await state.get_data()
+    if data.get('target_rps'):
+        await show_summary_menu(message, state)
+        return
+
     await message.answer(
-        'Супер! Теперь введи свой секретный API ключ (Token) для авторизации:'
+        '🔑 Супер! Теперь введи свой секретный API ключ (Token) для авторизации:'
     )
     await state.set_state(EvaluationFSM.waiting_for_token)
 
@@ -111,47 +181,22 @@ async def process_url(message: Message, state: FSMContext):
 @router.message(EvaluationFSM.waiting_for_token)
 async def process_token(message: Message, state: FSMContext):
     await state.update_data(token=message.text.strip())
+
+    data = await state.get_data()
+    if data.get('target_rps'):
+        await show_summary_menu(message, state)
+        return
+
     await message.answer(
-        'Отлично. Выбери уровень сложности (от этого зависит RPS - количество запросов в секунду):',
+        '📊 Отлично. Выбери уровень сложности (от этого зависит RPS):',
         reply_markup=get_rps_keyboard(),
     )
     await state.set_state(EvaluationFSM.waiting_for_rps_level)
 
 
 @router.message(EvaluationFSM.waiting_for_rps_level)
-async def process_rps_level(message: Message, state: FSMContext):
-    level_text = message.text
-    target_rps = 0
-    if 'Easy' in level_text:
-        target_rps = settings.rps_easy
-    elif 'Medium' in level_text:
-        target_rps = settings.rps_medium
-    elif 'Hard' in level_text:
-        target_rps = settings.rps_hard
-    else:
-        await message.answer('Пожалуйста, используйте кнопки.')
-        return
-
-    await state.update_data(target_rps=target_rps)
-
-    user_data = await state.get_data()
-
-    await message.answer(
-        f'Данные собраны!\n\n'
-        f'Имя: {user_data.get("student_name")}\n'
-        f'Модель: {user_data.get("model_name")}\n'
-        f'URL: {user_data.get("base_url")}\n'
-        f'Сложность: {target_rps} RPS\n\n'
-        'Начинаю процесс тестирования... Сначала проверим работоспособность сервиса 🚀',
-        reply_markup=ReplyKeyboardRemove(),
-    )
-
-    # Переходим в состояние чтобы игнорировать другой ввод
-    await state.set_state(EvaluationFSM.running_evaluation)
-
-    # Запускаем конвейер в фоне (чтобы не блокировать хендлер слишком уж откровенно,
-    # хотя aiogram 3 выполняет хендлеры конкурентно)
-    asyncio.create_task(run_evaluation_pipeline(message, state, user_data, target_rps))
+async def process_rps_level_text(message: Message, state: FSMContext):
+    await message.answer('⚠️ Пожалуйста, используй кнопки для выбора уровня RPS.')
 
 
 async def run_evaluation_pipeline(
@@ -181,9 +226,12 @@ async def run_evaluation_pipeline(
     )
     if not ok:
         await message.answer(
-            f'❌ **Sanity Check не пройден!**\n\nПричина: {err_msg}\n\nПожалуйста, исправь ошибку и попробуй снова - /start'
+            f'❌ **Sanity Check не пройден!**\n\n'
+            f'Причина: `{err_msg}`\n\n'
+            'Что будем делать?',
+            reply_markup=get_config_menu_keyboard(),
+            parse_mode='Markdown',
         )
-        await state.clear()
         return
 
     await message.answer(
@@ -254,3 +302,89 @@ async def run_evaluation_pipeline(
 
     await message.answer(report, parse_mode='Markdown', disable_web_page_preview=True)
     await state.clear()
+
+
+@router.callback_query(F.data == 'start_new')
+async def handle_start_new(callback: CallbackQuery, state: FSMContext):
+    await callback.message.edit_text('🚀 Запускаю новый тест...')
+    await start_evaluation_flow(callback.message, state, callback.from_user)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith('rps_'))
+async def handle_rps_selection(callback: CallbackQuery, state: FSMContext):
+    target_rps = int(callback.data.split('_')[1])
+    await state.update_data(target_rps=target_rps)
+
+    user_data = await state.get_data()
+
+    await callback.message.edit_text(f'✅ Выбран уровень: `{target_rps} RPS`', parse_mode='Markdown')
+
+    # Re-call the logic from process_rps_level but adapted for callback
+    await callback.message.answer(
+        f'✨ **Данные собраны!**\n\n'
+        f'• **Имя**: {user_data.get("student_name")}\n'
+        f'• **Модель**: `{user_data.get("model_name")}`\n'
+        f'• **URL**: `{user_data.get("base_url")}`\n'
+        f'• **Сложность**: `{target_rps} RPS`\n\n'
+        '🚀 Начинаю процесс тестирования... Сначала проверим сервис.',
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode='Markdown',
+    )
+
+    await state.set_state(EvaluationFSM.running_evaluation)
+    asyncio.create_task(run_evaluation_pipeline(callback.message, state, user_data, target_rps))
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'retry_check')
+async def handle_retry(callback: CallbackQuery, state: FSMContext):
+    user_data = await state.get_data()
+    target_rps = user_data.get('target_rps', settings.rps_easy)
+
+    await callback.message.edit_text(
+        '🔄 Повторяю проверку... 🚀',
+        reply_markup=None,
+    )
+
+    asyncio.create_task(
+        run_evaluation_pipeline(callback.message, state, user_data, target_rps)
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'edit_model')
+async def handle_edit_model(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(EvaluationFSM.waiting_for_model_name)
+    await callback.message.answer(
+        '📝 Введите новое название модели (например, `main` или `boost`):',
+        parse_mode='Markdown',
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'edit_url')
+async def handle_edit_url(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(EvaluationFSM.waiting_for_url)
+    await callback.message.answer(
+        '🔗 Введите новый базовый URL (например: `http://recsys-service.com`):',
+        parse_mode='Markdown',
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'edit_token')
+async def handle_edit_token(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(EvaluationFSM.waiting_for_token)
+    await callback.message.answer('🔑 Введите новый API ключ (Token):')
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'cancel_evaluation')
+async def handle_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text(
+        '❌ Действие отменено.',
+        reply_markup=get_start_keyboard(),
+    )
+    await callback.answer()

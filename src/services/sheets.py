@@ -27,16 +27,17 @@ def init_gspread_client():
             # Расцениваем как JSON строку
             creds_dict = json.loads(creds_raw)
             credentials = Credentials.from_service_account_info(
-                creds_dict, scopes=SCOPES
+                creds_dict,
+                scopes=SCOPES,
             )
         else:
             # Расцениваем как путь к файлу
             credentials = Credentials.from_service_account_file(
-                creds_raw, scopes=SCOPES
+                creds_raw,
+                scopes=SCOPES,
             )
 
-        client = gspread.authorize(credentials)
-        return client
+        return gspread.authorize(credentials)
     except Exception as e:
         logger.error(f'Ошибка при авторизации gspread: {e}')
         return None
