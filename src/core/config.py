@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     google_creds_json: str = ''  # Путь или json строка для gspread
     google_sheet_url: str = ''
 
+    database_path: str = 'data/recsys_bot.db'
+
     model_config = SettingsConfigDict(
         env_file='.env', env_file_encoding='utf-8', extra='ignore'
     )

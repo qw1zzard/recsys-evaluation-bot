@@ -73,8 +73,8 @@ def write_evaluation_result(
             sheet.append_row(
                 [
                     'Timestamp',
-                    'Имя/Логин',
-                    'Модель',
+                    'Nickname',
+                    'Model',
                     'Target RPS',
                     'Actual RPS',
                     'Success Rate %',
@@ -85,7 +85,6 @@ def write_evaluation_result(
                     'MAP@10',
                     'MRR',
                     'HitRate@10',
-                    'Recall@5',
                     'NDCG@5',
                 ]
             )
@@ -106,7 +105,6 @@ def write_evaluation_result(
             f'{metrics.get("map@10", 0.0):.4f}',
             f'{metrics.get("mrr", 0.0):.4f}',
             f'{metrics.get("hitrate@10", 0.0):.4f}',
-            f'{metrics.get("recall@5", 0.0):.4f}',
             f'{metrics.get("ndcg@5", 0.0):.4f}',
         ]
 

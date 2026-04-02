@@ -7,6 +7,7 @@ setup-dev:
 	uv sync
 
 run:
+	mkdir -p data
 	uv run python -m src.main
 
 ruff:

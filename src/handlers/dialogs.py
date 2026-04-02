@@ -16,6 +16,7 @@ from aiogram.types import (
 
 from src.core.config import settings
 from src.services.data_loader import load_ground_truth, load_test_users
+from src.services.database import db
 from src.services.metrics import (
     calculate_ap,
     calculate_f1,
@@ -69,35 +70,21 @@ def get_config_menu_keyboard():
                     text='📝 Изменить модель', callback_data='edit_model'
                 )
             ],
-            [
-                InlineKeyboardButton(text='🔗 Изменить URL', callback_data='edit_url')
-            ],
+            [InlineKeyboardButton(text='🔗 Изменить URL', callback_data='edit_url')],
             [
                 InlineKeyboardButton(
                     text='🔑 Изменить токен', callback_data='edit_token'
                 )
             ],
-            [
-                InlineKeyboardButton(
-                    text='📊 Изменить RPS', callback_data='edit_rps'
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text='🧹 Сбросить всё', callback_data='start_new'
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text='❌ Отмена', callback_data='cancel_evaluation'
-                )
-            ],
+            [InlineKeyboardButton(text='📊 Изменить RPS', callback_data='edit_rps')],
+            [InlineKeyboardButton(text='🧹 Сбросить всё', callback_data='start_new')],
+            [InlineKeyboardButton(text='❌ Отмена', callback_data='cancel_evaluation')],
         ]
     )
 
 
 async def show_summary_menu(message: Message, state: FSMContext):
-    user_data = await state.get_data()
+    user_data = await state.get_data() or {}
     await message.answer(
         f'⚙️ **Конфигурация теста**\n\n'
         f'• **Модель**: `{user_data.get("model_name", "—")}`\n'
@@ -110,19 +97,39 @@ async def show_summary_menu(message: Message, state: FSMContext):
 
 
 async def start_evaluation_flow(message: Message, state: FSMContext, user: User):
-    user_data = await state.get_data()
-
-    # If user already has some data, show summary menu instead of starting from scratch
-    if user_data.get('model_name') and user_data.get('base_url'):
-        await show_summary_menu(message, state)
-        return
+    user_data = await state.get_data() or {}
 
     if user.username:
         student_name = f'@{user.username}'
     else:
         student_name = user.full_name
 
+    # Try to load existing config from DB
+    if not user_data:
+        saved_config = await db.get_user_config(user.id)
+        if saved_config:
+            # Reconstruct data for FSM. We need to match keys used in the code.
+            # user_configs uses snake_case, but some keys in FSM might be different.
+            # Based on code: model_name, base_url, target_rps, token, student_name
+            fsm_data = {
+                'student_name': saved_config.get('username') or student_name,
+                'model_name': saved_config.get('model_name'),
+                'base_url': saved_config.get('base_url'),
+                'token': saved_config.get('token'),
+                'target_rps': saved_config.get('target_rps'),
+            }
+            # Remove None values
+            fsm_data = {k: v for k, v in fsm_data.items() if v is not None}
+            await state.update_data(**fsm_data)
+            user_data = fsm_data
+
+    # If user already has some data, show summary menu instead of starting from scratch
+    if user_data.get('model_name') and user_data.get('base_url'):
+        await show_summary_menu(message, state)
+        return
+
     await state.update_data(student_name=student_name)
+    await db.upsert_user_config(user_id=user.id, username=student_name)
 
     await message.answer(
         f'👋 Привет, {student_name}!\n\n'
@@ -161,6 +168,7 @@ async def process_model_name(message: Message, state: FSMContext):
         return
 
     await state.update_data(model_name=model_name)
+    await db.upsert_user_config(user_id=message.from_user.id, model_name=model_name)
 
     data = await state.get_data()
     if data.get('target_rps'):
@@ -186,6 +194,7 @@ async def process_url(message: Message, state: FSMContext):
         )
         return
     await state.update_data(base_url=url)
+    await db.upsert_user_config(user_id=message.from_user.id, base_url=url)
 
     data = await state.get_data()
     if data.get('target_rps'):
@@ -200,7 +209,9 @@ async def process_url(message: Message, state: FSMContext):
 
 @router.message(EvaluationFSM.waiting_for_token)
 async def process_token(message: Message, state: FSMContext):
-    await state.update_data(token=message.text.strip())
+    token = message.text.strip()
+    await state.update_data(token=token)
+    await db.upsert_user_config(user_id=message.from_user.id, token=token)
 
     data = await state.get_data()
     if data.get('target_rps'):
@@ -230,8 +241,18 @@ async def run_evaluation_pipeline(
     # 1. Загрузка данных для теста
     test_users = load_test_users()
     if not test_users:
+        error_msg = 'test.csv отсутствует'
         await message.answer(
-            '❌ Внутренняя ошибка бота: невозможно загрузить тестовых пользователей (test.csv отсутствует).'
+            f'❌ Внутренняя ошибка бота: невозможно загрузить тестовых пользователей ({error_msg}).'
+        )
+        await db.save_test_result(
+            {
+                'user_id': message.chat.id,
+                'model_name': model_name,
+                'target_rps': target_rps,
+                'status': 'error',
+                'error_message': error_msg,
+            }
         )
         await state.clear()
         return
@@ -251,6 +272,15 @@ async def run_evaluation_pipeline(
             'Что будем делать?',
             reply_markup=get_config_menu_keyboard(),
             parse_mode='Markdown',
+        )
+        await db.save_test_result(
+            {
+                'user_id': message.chat.id,
+                'model_name': model_name,
+                'target_rps': target_rps,
+                'status': 'failed_sanity',
+                'error_message': err_msg,
+            }
         )
         return
 
@@ -281,7 +311,6 @@ async def run_evaluation_pipeline(
         'map@10': 0.0,
         'mrr': 0.0,
         'hitrate@10': 0.0,
-        'recall@5': 0.0,
         'ndcg@5': 0.0,
     }
     valuable_queries = 0
@@ -292,13 +321,16 @@ async def run_evaluation_pipeline(
             actual_items = ground_truth.get(uid, set())
             if actual_items:
                 recos = res.recos
-                metrics_sums['precision@10'] += calculate_precision(recos, actual_items, k=10)
+                metrics_sums['precision@10'] += calculate_precision(
+                    recos, actual_items, k=10
+                )
                 metrics_sums['recall@10'] += calculate_recall(recos, actual_items, k=10)
                 metrics_sums['ndcg@10'] += calculate_ndcg(recos, actual_items, k=10)
                 metrics_sums['map@10'] += calculate_ap(recos, actual_items, k=10)
                 metrics_sums['mrr'] += calculate_mrr(recos, actual_items)
-                metrics_sums['hitrate@10'] += calculate_hit_rate(recos, actual_items, k=10)
-                metrics_sums['recall@5'] += calculate_recall(recos, actual_items, k=5)
+                metrics_sums['hitrate@10'] += calculate_hit_rate(
+                    recos, actual_items, k=10
+                )
                 metrics_sums['ndcg@5'] += calculate_ndcg(recos, actual_items, k=5)
                 valuable_queries += 1
 
@@ -327,11 +359,33 @@ async def run_evaluation_pipeline(
         f'• MAP@10: `{mean_metrics["map@10"]:.4f}`\n'
         f'• MRR: `{mean_metrics["mrr"]:.4f}`\n'
         f'• HitRate@10: `{mean_metrics["hitrate@10"]:.4f}`\n'
-        f'• Recall@5: `{mean_metrics["recall@5"]:.4f}`\n'
         f'• NDCG@5: `{mean_metrics["ndcg@5"]:.4f}`\n\n'
     )
 
-    # 6. Запись в Google Sheets
+    # 6. Запись в БД
+    await db.save_test_result(
+        {
+            'user_id': message.chat.id,  # В данном случае это user_id
+            'model_name': model_name,
+            'target_rps': target_rps,
+            'actual_rps': actual_rps,
+            'success_rate': success_rate,
+            'latency_p50': latency_stats['p50'],
+            'latency_p95': latency_stats['p95'],
+            'latency_p99': latency_stats['p99'],
+            'precision_at_10': mean_metrics['precision@10'],
+            'recall_at_10': mean_metrics['recall@10'],
+            'f1_at_10': f1_10,
+            'ndcg_at_10': mean_metrics['ndcg@10'],
+            'map_at_10': mean_metrics['map@10'],
+            'mrr': mean_metrics['mrr'],
+            'hitrate_at_10': mean_metrics['hitrate@10'],
+            'duration': elapsed,
+            'status': 'success',
+        }
+    )
+
+    # 7. Запись в Google Sheets
     sheet_url = write_evaluation_result(
         student_name,
         model_name,
@@ -364,10 +418,13 @@ async def handle_start_new(callback: CallbackQuery, state: FSMContext):
 async def handle_rps_selection(callback: CallbackQuery, state: FSMContext):
     target_rps = int(callback.data.split('_')[1])
     await state.update_data(target_rps=target_rps)
+    await db.upsert_user_config(user_id=callback.from_user.id, target_rps=target_rps)
 
     user_data = await state.get_data()
 
-    await callback.message.edit_text(f'✅ Выбран уровень: `{target_rps} RPS`', parse_mode='Markdown')
+    await callback.message.edit_text(
+        f'✅ Выбран уровень: `{target_rps} RPS`', parse_mode='Markdown'
+    )
 
     # Re-call the logic from process_rps_level but adapted for callback
     await callback.message.answer(
@@ -382,7 +439,9 @@ async def handle_rps_selection(callback: CallbackQuery, state: FSMContext):
     )
 
     await state.set_state(EvaluationFSM.running_evaluation)
-    asyncio.create_task(run_evaluation_pipeline(callback.message, state, user_data, target_rps))
+    asyncio.create_task(
+        run_evaluation_pipeline(callback.message, state, user_data, target_rps)
+    )
     await callback.answer()
 
 
