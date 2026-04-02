@@ -50,8 +50,7 @@ def write_evaluation_result(
     actual_rps: float,
     success_rate: float,
     p95_latency: float,
-    precision_10: float,
-    recall_10: float,
+    metrics: dict[str, float],
 ) -> str | None:
     """
     Записывает результаты в конец таблицы GOOGLE_SHEET_URL
@@ -69,8 +68,8 @@ def write_evaluation_result(
         # Открываем таблицу по URL
         sheet = client.open_by_url(settings.google_sheet_url).sheet1
 
-        # Если таблица пустая, возможно стоит добавить хидеры
-        if len(sheet.get_all_values()) == 0:
+        # Если таблица пустая, добавляем заголовки
+        if sheet.get_all_values() == [[]]:
             sheet.append_row(
                 [
                     'Timestamp',
@@ -82,6 +81,12 @@ def write_evaluation_result(
                     'p95 Latency (ms)',
                     'Precision@10',
                     'Recall@10',
+                    'NDCG@10',
+                    'MAP@10',
+                    'MRR',
+                    'HitRate@10',
+                    'Recall@5',
+                    'NDCG@5',
                 ]
             )
 
@@ -95,8 +100,14 @@ def write_evaluation_result(
             f'{actual_rps:.2f}',
             f'{success_rate}%',
             f'{p95_latency}',
-            f'{precision_10:.4f}',
-            f'{recall_10:.4f}',
+            f'{metrics.get("precision@10", 0.0):.4f}',
+            f'{metrics.get("recall@10", 0.0):.4f}',
+            f'{metrics.get("ndcg@10", 0.0):.4f}',
+            f'{metrics.get("map@10", 0.0):.4f}',
+            f'{metrics.get("mrr", 0.0):.4f}',
+            f'{metrics.get("hitrate@10", 0.0):.4f}',
+            f'{metrics.get("recall@5", 0.0):.4f}',
+            f'{metrics.get("ndcg@5", 0.0):.4f}',
         ]
 
         sheet.append_row(row)

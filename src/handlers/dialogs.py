@@ -17,6 +17,11 @@ from aiogram.types import (
 from src.core.config import settings
 from src.services.data_loader import load_ground_truth, load_test_users
 from src.services.metrics import (
+    calculate_ap,
+    calculate_f1,
+    calculate_hit_rate,
+    calculate_mrr,
+    calculate_ndcg,
     calculate_precision,
     calculate_recall,
     calculate_success_rate,
@@ -56,7 +61,7 @@ def get_config_menu_keyboard():
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text='🔄 Запустить проверку', callback_data='retry_check'
+                    text='🚀 Запустить тест', callback_data='retry_check'
                 )
             ],
             [
@@ -70,6 +75,16 @@ def get_config_menu_keyboard():
             [
                 InlineKeyboardButton(
                     text='🔑 Изменить токен', callback_data='edit_token'
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text='📊 Изменить RPS', callback_data='edit_rps'
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text='🧹 Сбросить всё', callback_data='start_new'
                 )
             ],
             [
@@ -95,7 +110,12 @@ async def show_summary_menu(message: Message, state: FSMContext):
 
 
 async def start_evaluation_flow(message: Message, state: FSMContext, user: User):
-    await state.clear()
+    user_data = await state.get_data()
+
+    # If user already has some data, show summary menu instead of starting from scratch
+    if user_data.get('model_name') and user_data.get('base_url'):
+        await show_summary_menu(message, state)
+        return
 
     if user.username:
         student_name = f'@{user.username}'
@@ -253,8 +273,17 @@ async def run_evaluation_pipeline(
     latencies = [r.latency for r in results]
     latency_stats = get_latency_percentiles(latencies)
 
-    precision_sum = 0.0
-    recall_sum = 0.0
+    # Инициализация сумматоров для метрик
+    metrics_sums = {
+        'precision@10': 0.0,
+        'recall@10': 0.0,
+        'ndcg@10': 0.0,
+        'map@10': 0.0,
+        'mrr': 0.0,
+        'hitrate@10': 0.0,
+        'recall@5': 0.0,
+        'ndcg@5': 0.0,
+    }
     valuable_queries = 0
 
     for i, res in enumerate(results):
@@ -262,12 +291,24 @@ async def run_evaluation_pipeline(
             uid = test_users[i]
             actual_items = ground_truth.get(uid, set())
             if actual_items:
-                precision_sum += calculate_precision(res.recos, actual_items)
-                recall_sum += calculate_recall(res.recos, actual_items)
+                recos = res.recos
+                metrics_sums['precision@10'] += calculate_precision(recos, actual_items, k=10)
+                metrics_sums['recall@10'] += calculate_recall(recos, actual_items, k=10)
+                metrics_sums['ndcg@10'] += calculate_ndcg(recos, actual_items, k=10)
+                metrics_sums['map@10'] += calculate_ap(recos, actual_items, k=10)
+                metrics_sums['mrr'] += calculate_mrr(recos, actual_items)
+                metrics_sums['hitrate@10'] += calculate_hit_rate(recos, actual_items, k=10)
+                metrics_sums['recall@5'] += calculate_recall(recos, actual_items, k=5)
+                metrics_sums['ndcg@5'] += calculate_ndcg(recos, actual_items, k=5)
                 valuable_queries += 1
 
-    mean_precision = precision_sum / valuable_queries if valuable_queries > 0 else 0.0
-    mean_recall = recall_sum / valuable_queries if valuable_queries > 0 else 0.0
+    # Усреднение метрик
+    mean_metrics = {}
+    for key, total in metrics_sums.items():
+        mean_metrics[key] = total / valuable_queries if valuable_queries > 0 else 0.0
+
+    # Расчет F1@10
+    f1_10 = calculate_f1(mean_metrics['precision@10'], mean_metrics['recall@10'])
 
     # 5. Сообщение пользователю
     report = (
@@ -278,9 +319,16 @@ async def run_evaluation_pipeline(
         f'• Фактический RPS: `{actual_rps:.2f}`\n'
         f'• Успешных ответов (200): `{success_rate}%`\n'
         f'• Latency (ms): p50=`{latency_stats["p50"]}`, p95=`{latency_stats["p95"]}`, p99=`{latency_stats["p99"]}`\n\n'
-        f'🎯 **Качество Рекомендаций (@10):**\n'
-        f'• Precision: `{mean_precision:.4f}`\n'
-        f'• Recall: `{mean_recall:.4f}`\n\n'
+        f'🎯 **Качество Рекомендаций:**\n'
+        f'• Precision@10: `{mean_metrics["precision@10"]:.4f}`\n'
+        f'• Recall@10: `{mean_metrics["recall@10"]:.4f}`\n'
+        f'• F1@10: `{f1_10:.4f}`\n'
+        f'• NDCG@10: `{mean_metrics["ndcg@10"]:.4f}`\n'
+        f'• MAP@10: `{mean_metrics["map@10"]:.4f}`\n'
+        f'• MRR: `{mean_metrics["mrr"]:.4f}`\n'
+        f'• HitRate@10: `{mean_metrics["hitrate@10"]:.4f}`\n'
+        f'• Recall@5: `{mean_metrics["recall@5"]:.4f}`\n'
+        f'• NDCG@5: `{mean_metrics["ndcg@5"]:.4f}`\n\n'
     )
 
     # 6. Запись в Google Sheets
@@ -291,8 +339,7 @@ async def run_evaluation_pipeline(
         actual_rps,
         success_rate,
         latency_stats['p95'],
-        mean_precision,
-        mean_recall,
+        mean_metrics,
     )
 
     if sheet_url:
@@ -301,7 +348,9 @@ async def run_evaluation_pipeline(
         report += '⚠️ Не удалось сохранить результаты в таблицу (отсутствуют настройки интеграции).'
 
     await message.answer(report, parse_mode='Markdown', disable_web_page_preview=True)
-    await state.clear()
+
+    # Сохраняем состояние, чтобы пользователь мог изменить параметры и запустить снова
+    await show_summary_menu(message, state)
 
 
 @router.callback_query(F.data == 'start_new')
@@ -377,6 +426,16 @@ async def handle_edit_url(callback: CallbackQuery, state: FSMContext):
 async def handle_edit_token(callback: CallbackQuery, state: FSMContext):
     await state.set_state(EvaluationFSM.waiting_for_token)
     await callback.message.answer('🔑 Введите новый API ключ (Token):')
+    await callback.answer()
+
+
+@router.callback_query(F.data == 'edit_rps')
+async def handle_edit_rps(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(EvaluationFSM.waiting_for_rps_level)
+    await callback.message.answer(
+        '📊 Выберите новый уровень сложности:',
+        reply_markup=get_rps_keyboard(),
+    )
     await callback.answer()
 
 

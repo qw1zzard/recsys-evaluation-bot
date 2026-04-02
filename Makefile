@@ -1,15 +1,14 @@
-.PHONY: run dev format lint setup
+.PHONY: run setup setup-dev ruff clean
 
 setup:
+	uv sync --no-dev
+
+setup-dev:
 	uv sync
 
 run:
 	uv run python -m src.main
 
-format:
-	uv run black src
-	uv run isort src
-
-lint:
-	uv run flake8 src
-	uv run pylint src
+ruff:
+	uv run ruff check src --fix
+	uv run ruff format src
