@@ -1,0 +1,36 @@
+[project]
+name = "recsys-evaluation-bot"
+version = "0.1.0"
+description = "Telegram bot for evaluating recommender systems"
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "aiogram>=3.26.0",
+    "aiogram-sqlite-storage>=1.0.1",
+    "aiohttp>=3.13.5",
+    "aiosqlite>=0.22.1",
+    "google-auth>=2.49.1",
+    "gspread>=6.2.1",
+    "numpy>=2.2.3",
+    "pandas>=3.0.2",
+    "pydantic-settings>=2.13.1",
+    "python-dotenv>=1.2.2",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.9.9",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
