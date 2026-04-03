@@ -1,6 +1,7 @@
 import asyncio
 import re
 import time
+from html import escape
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandStart
@@ -86,13 +87,13 @@ def get_config_menu_keyboard():
 async def show_summary_menu(message: Message, state: FSMContext):
     user_data = await state.get_data() or {}
     await message.answer(
-        f'⚙️ **Конфигурация теста**\n\n'
-        f'• **Модель**: `{user_data.get("model_name", "—")}`\n'
-        f'• **URL**: `{user_data.get("base_url", "—")}`\n'
-        f'• **Сложность**: `{user_data.get("target_rps", "—")} RPS`\n\n'
+        '⚙️ <b>Конфигурация теста</b>\n\n'
+        f'• <b>Модель</b>: <code>{escape(str(user_data.get("model_name", "—")))}</code>\n'
+        f'• <b>URL</b>: <code>{escape(str(user_data.get("base_url", "—")))}</code>\n'
+        f'• <b>Сложность</b>: <code>{escape(str(user_data.get("target_rps", "—")))} RPS</code>\n\n'
         'Что будем делать?',
         reply_markup=get_config_menu_keyboard(),
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
 
 
@@ -132,11 +133,11 @@ async def start_evaluation_flow(message: Message, state: FSMContext, user: User)
     await db.upsert_user_config(user_id=user.id, username=student_name)
 
     await message.answer(
-        f'👋 Привет, {student_name}!\n\n'
+        f'👋 Привет, {escape(student_name)}!\n\n'
         'Я бот для оценки рекомендательных систем. Давай протестируем твой сервис! 🚀\n\n'
-        '📝 Введи название модели (например, `main` или `boost`):',
+        '📝 Введи название модели (например, <code>main</code> или <code>boost</code>):',
         reply_markup=ReplyKeyboardRemove(),
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
     await state.set_state(EvaluationFSM.waiting_for_model_name)
 
@@ -177,9 +178,9 @@ async def process_model_name(message: Message, state: FSMContext):
 
     await message.answer(
         '✅ Принято. Теперь введи базовый URL твоего сервиса\n'
-        '(например: `http://recsys-service.com` или `http://localhost:8000`):',
+        '(например: <code>http://recsys-service.com</code>):',
         reply_markup=ReplyKeyboardRemove(),
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
     await state.set_state(EvaluationFSM.waiting_for_url)
 
@@ -189,8 +190,8 @@ async def process_url(message: Message, state: FSMContext):
     url = message.text.strip().rstrip('/')
     if not url.startswith('http'):
         await message.answer(
-            '⚠️ Пожалуйста, введи корректный URL (с `http://` или `https://`).',
-            parse_mode='Markdown',
+            '⚠️ Пожалуйста, введи корректный URL (с <code>http://</code> или <code>https://</code>).',
+            parse_mode='HTML',
         )
         return
     await state.update_data(base_url=url)
@@ -267,11 +268,11 @@ async def run_evaluation_pipeline(
     )
     if not ok:
         await message.answer(
-            f'❌ **Sanity Check не пройден!**\n\n'
-            f'Причина: `{err_msg}`\n\n'
+            '❌ <b>Sanity Check не пройден!</b>\n\n'
+            f'Причина: <code>{escape(str(err_msg))}</code>\n\n'
             'Что будем делать?',
             reply_markup=get_config_menu_keyboard(),
-            parse_mode='Markdown',
+            parse_mode='HTML',
         )
         await db.save_test_result(
             {
@@ -344,22 +345,23 @@ async def run_evaluation_pipeline(
 
     # 5. Сообщение пользователю
     report = (
-        f'📊 **Результаты Тестирования**\n\n'
-        f'Модель: `{model_name}`\n\n'
-        f'⚡ **Производительность:**\n'
-        f'• Целевой RPS: `{target_rps}`\n'
-        f'• Фактический RPS: `{actual_rps:.2f}`\n'
-        f'• Успешных ответов (200): `{success_rate}%`\n'
-        f'• Latency (ms): p50=`{latency_stats["p50"]}`, p95=`{latency_stats["p95"]}`, p99=`{latency_stats["p99"]}`\n\n'
-        f'🎯 **Качество Рекомендаций:**\n'
-        f'• Precision@10: `{mean_metrics["precision@10"]:.4f}`\n'
-        f'• Recall@10: `{mean_metrics["recall@10"]:.4f}`\n'
-        f'• F1@10: `{f1_10:.4f}`\n'
-        f'• NDCG@10: `{mean_metrics["ndcg@10"]:.4f}`\n'
-        f'• MAP@10: `{mean_metrics["map@10"]:.4f}`\n'
-        f'• MRR: `{mean_metrics["mrr"]:.4f}`\n'
-        f'• HitRate@10: `{mean_metrics["hitrate@10"]:.4f}`\n'
-        f'• NDCG@5: `{mean_metrics["ndcg@5"]:.4f}`\n\n'
+        '📊 <b>Результаты Тестирования</b>\n\n'
+        f'Модель: <code>{escape(str(model_name))}</code>\n\n'
+        '⚡ <b>Производительность:</b>\n'
+        f'• Целевой RPS: <code>{target_rps}</code>\n'
+        f'• Фактический RPS: <code>{actual_rps:.2f}</code>\n'
+        f'• Успешных ответов (200): <code>{success_rate}%</code>\n'
+        f'• Latency (ms): p50=<code>{latency_stats["p50"]}</code>, '
+        f'p95=<code>{latency_stats["p95"]}</code>, p99=<code>{latency_stats["p99"]}</code>\n\n'
+        '🎯 <b>Качество Рекомендаций:</b>\n'
+        f'• Precision@10: <code>{mean_metrics["precision@10"]:.4f}</code>\n'
+        f'• Recall@10: <code>{mean_metrics["recall@10"]:.4f}</code>\n'
+        f'• F1@10: <code>{f1_10:.4f}</code>\n'
+        f'• NDCG@10: <code>{mean_metrics["ndcg@10"]:.4f}</code>\n'
+        f'• MAP@10: <code>{mean_metrics["map@10"]:.4f}</code>\n'
+        f'• MRR: <code>{mean_metrics["mrr"]:.4f}</code>\n'
+        f'• HitRate@10: <code>{mean_metrics["hitrate@10"]:.4f}</code>\n'
+        f'• NDCG@5: <code>{mean_metrics["ndcg@5"]:.4f}</code>\n\n'
     )
 
     # 6. Запись в БД
@@ -397,11 +399,12 @@ async def run_evaluation_pipeline(
     )
 
     if sheet_url:
-        report += f'✅ Твои результаты успешно занесены в публичную [Google Таблицу]({sheet_url})'
+        safe_url = escape(str(sheet_url), quote=True)
+        report += f'✅ Твои результаты успешно занесены в публичную <a href="{safe_url}">Google Таблицу</a>'
     else:
         report += '⚠️ Не удалось сохранить результаты в таблицу (отсутствуют настройки интеграции).'
 
-    await message.answer(report, parse_mode='Markdown', disable_web_page_preview=True)
+    await message.answer(report, parse_mode='HTML', disable_web_page_preview=True)
 
     # Сохраняем состояние, чтобы пользователь мог изменить параметры и запустить снова
     await show_summary_menu(message, state)
@@ -423,19 +426,19 @@ async def handle_rps_selection(callback: CallbackQuery, state: FSMContext):
     user_data = await state.get_data()
 
     await callback.message.edit_text(
-        f'✅ Выбран уровень: `{target_rps} RPS`', parse_mode='Markdown'
+        f'✅ Выбран уровень: <code>{target_rps} RPS</code>', parse_mode='HTML'
     )
 
     # Re-call the logic from process_rps_level but adapted for callback
     await callback.message.answer(
-        f'✨ **Данные собраны!**\n\n'
-        f'• **Имя**: {user_data.get("student_name")}\n'
-        f'• **Модель**: `{user_data.get("model_name")}`\n'
-        f'• **URL**: `{user_data.get("base_url")}`\n'
-        f'• **Сложность**: `{target_rps} RPS`\n\n'
+        '✨ <b>Данные собраны!</b>\n\n'
+        f'• <b>Имя</b>: {escape(str(user_data.get("student_name") or ""))}\n'
+        f'• <b>Модель</b>: <code>{escape(str(user_data.get("model_name") or ""))}</code>\n'
+        f'• <b>URL</b>: <code>{escape(str(user_data.get("base_url") or ""))}</code>\n'
+        f'• <b>Сложность</b>: <code>{target_rps} RPS</code>\n\n'
         '🚀 Начинаю процесс тестирования... Сначала проверим сервис.',
         reply_markup=ReplyKeyboardRemove(),
-        parse_mode='Markdown',
+        parse_mode='HTML',
     )
 
     await state.set_state(EvaluationFSM.running_evaluation)
@@ -465,8 +468,8 @@ async def handle_retry(callback: CallbackQuery, state: FSMContext):
 async def handle_edit_model(callback: CallbackQuery, state: FSMContext):
     await state.set_state(EvaluationFSM.waiting_for_model_name)
     await callback.message.answer(
-        '📝 Введите новое название модели (например, `main` или `boost`):',
-        parse_mode='Markdown',
+        '📝 Введите новое название модели (например, <code>main</code> или <code>boost</code>):',
+        parse_mode='HTML',
     )
     await callback.answer()
 
@@ -475,8 +478,8 @@ async def handle_edit_model(callback: CallbackQuery, state: FSMContext):
 async def handle_edit_url(callback: CallbackQuery, state: FSMContext):
     await state.set_state(EvaluationFSM.waiting_for_url)
     await callback.message.answer(
-        '🔗 Введите новый базовый URL (например: `http://recsys-service.com`):',
-        parse_mode='Markdown',
+        '🔗 Введите новый базовый URL (например: <code>http://recsys-service.com</code>):',
+        parse_mode='HTML',
     )
     await callback.answer()
 
